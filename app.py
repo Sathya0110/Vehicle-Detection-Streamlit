@@ -1,72 +1,54 @@
 import streamlit as st
-import cv2
 from ultralytics import YOLO
+import cv2
+import numpy as np
+from PIL import Image
 import pandas as pd
-import tempfile
 
-# --- Helper functions ---
-def draw_boxes(frame, results):
-    for box in results[0].boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        conf = box.conf[0]
-        cls = int(box.cls[0])
-        label = f"{results[0].names[cls]} {conf:.2f}"
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5, (0, 255, 0), 2)
-    return frame
+st.set_page_config(page_title="Image Vehicle Detection", layout="wide")
+st.title("🚗 Vehicle Detection from Images")
 
-def count_vehicles(results):
-    counts = {}
-    for cls in results[0].boxes.cls:
-        cls_name = results[0].names[int(cls)]
-        counts[cls_name] = counts.get(cls_name, 0) + 1
-    return counts
-
-# --- Streamlit UI ---
-st.set_page_config(page_title="Vehicle Detection Dashboard", layout="wide")
-st.title("🚗 Vehicle Detection System")
-
-video_file = st.file_uploader("Upload a video file", type=["mp4","avi","mov"])
-use_webcam = st.checkbox("Use Webcam Instead of Video", value=False)
-conf_thres = st.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.05)
-
+# Load YOLO model (auto-downloads weights)
 @st.cache_resource
 def load_model():
-    return YOLO("yolov8n.pt")  # Auto-downloads in cloud
+    return YOLO("yolov8n.pt")
+
 model = load_model()
 
-stframe = st.empty()
-vehicle_count_df = pd.DataFrame(columns=["Vehicle", "Count"])
+# Sidebar for confidence
+conf_thres = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.05)
 
-def process_frame(frame):
-    results = model(frame)
-    results = results[0].filter(conf=conf_thres)
-    frame = draw_boxes(frame, results)
-    counts = count_vehicles(results)
-    return frame, counts
+# Upload multiple images
+uploaded_files = st.file_uploader("Upload images", type=["jpg","jpeg","png"], accept_multiple_files=True)
 
-# Video upload
-if video_file is not None and not use_webcam:
-    tfile = tempfile.NamedTemporaryFile(delete=False)
-    tfile.write(video_file.read())
-    cap = cv2.VideoCapture(tfile.name)
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret: break
-        frame, counts = process_frame(frame)
-        if counts: vehicle_count_df = pd.DataFrame(list(counts.items()), columns=["Vehicle","Count"])
-        stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB")
-        st.dataframe(vehicle_count_df)
-    cap.release()
-
-# Webcam
-elif use_webcam:
-    cap = cv2.VideoCapture(0)
-    while True:
-        ret, frame = cap.read()
-        if not ret: break
-        frame, counts = process_frame(frame)
-        if counts: vehicle_count_df = pd.DataFrame(list(counts.items()), columns=["Vehicle","Count"])
-        stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB")
-        st.dataframe(vehicle_count_df)
+if uploaded_files:
+    cols = st.columns(len(uploaded_files))  # For side-by-side images
+    for i, file in enumerate(uploaded_files):
+        image = Image.open(file).convert("RGB")
+        frame = np.array(image)
+        
+        # Detection
+        results = model(frame)
+        results = results[0].filter(conf=conf_thres)
+        
+        # Draw boxes
+        for box in results[0].boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            cls = int(box.cls[0])
+            conf = box.conf[0]
+            label = f"{results[0].names[cls]} {conf:.2f}"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,0), 2)
+            cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+        
+        # Count vehicles
+        counts = {}
+        for cls in results[0].boxes.cls:
+            cls_name = results[0].names[int(cls)]
+            counts[cls_name] = counts.get(cls_name, 0) + 1
+        df_counts = pd.DataFrame(list(counts.items()), columns=["Vehicle","Count"])
+        
+        # Display in column
+        with cols[i]:
+            st.image(frame, channels="RGB", caption=f"Processed: {file.name}")
+            if not df_counts.empty:
+                st.table(df_counts)
